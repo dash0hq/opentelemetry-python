@@ -3,7 +3,6 @@
 
 """Configuration file loading and parsing."""
 
-import importlib.resources
 import json
 import logging
 import os
@@ -11,6 +10,12 @@ from pathlib import Path
 from typing import Any
 
 from opentelemetry.configuration._conversion import _dict_to_dataclass
+from opentelemetry.configuration._generated_validator import (
+    validate as _validate_against_schema,
+)
+from opentelemetry.configuration._validation_exceptions import (
+    JsonSchemaValueException,
+)
 from opentelemetry.configuration._exceptions import (
     ConfigurationError,
     MissingDependencyError,
@@ -30,16 +35,6 @@ except ImportError as exc:
         extras="file-configuration",
     ) from exc
 
-try:
-    import jsonschema
-except ImportError as exc:
-    raise MissingDependencyError(
-        package="jsonschema",
-        feature="File configuration",
-        install_name="opentelemetry-sdk",
-        extras="file-configuration",
-    ) from exc
-
 # Schema version vendored in schema.json. ``file_format`` values are accepted
 # per the configuration spec's versioning rules: the major version must match,
 # and a minor version newer than the one this SDK targets is accepted with a
@@ -47,21 +42,6 @@ except ImportError as exc:
 # https://github.com/open-telemetry/opentelemetry-configuration/blob/main/VERSIONING.md
 _SUPPORTED_SCHEMA_MAJOR = 1
 _SUPPORTED_SCHEMA_MINOR = 0
-
-_schema_cache: list[dict] = []
-
-
-def _get_schema() -> dict:
-    if not _schema_cache:
-        schema_path = (
-            importlib.resources.files("opentelemetry.configuration")
-            / "schema.json"
-        )
-        _schema_cache.append(
-            json.loads(schema_path.read_text(encoding="utf-8"))
-        )
-    return _schema_cache[0]
-
 
 _logger = logging.getLogger(__name__)
 
@@ -173,21 +153,10 @@ def _validate_schema(data: dict) -> None:
         ConfigurationError: If the data does not conform to the schema.
     """
     try:
-        jsonschema.validate(
-            instance=data,
-            schema=_get_schema(),
-            cls=jsonschema.Draft202012Validator,
-        )
-    except jsonschema.ValidationError as exc:
+        _validate_against_schema(data)
+    except JsonSchemaValueException as exc:
         raise ConfigurationError(
-            f"Configuration does not match schema: {exc.message} "
-            f"(at {' -> '.join(str(p) for p in exc.absolute_path)})"
-            if exc.absolute_path
-            else f"Configuration does not match schema: {exc.message}"
-        ) from exc
-    except jsonschema.SchemaError as exc:
-        raise ConfigurationError(
-            f"Invalid configuration schema: {exc.message}"
+            f"Configuration does not match schema: {exc.message}"
         ) from exc
 
 
