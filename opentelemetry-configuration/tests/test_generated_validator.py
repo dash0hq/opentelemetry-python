@@ -12,6 +12,7 @@ ask both and compare.
 import json
 import unittest
 from decimal import Decimal  # noqa: F401
+from importlib.util import module_from_spec, spec_from_file_location
 from pathlib import Path
 
 import jsonschema
@@ -23,6 +24,13 @@ from opentelemetry.configuration._validation_exceptions import (
 
 _PACKAGE_ROOT = Path(_generated_validator.__file__).parent
 _SCHEMA = json.loads((_PACKAGE_ROOT / "schema.json").read_text())
+
+_CODEGEN_SPEC = spec_from_file_location(
+    "generate_validator",
+    Path(__file__).resolve().parent.parent / "codegen" / "generate_validator.py",
+)
+_CODEGEN = module_from_spec(_CODEGEN_SPEC)
+_CODEGEN_SPEC.loader.exec_module(_CODEGEN)
 
 _VALID = {
     "file_format": "1.0-rc.1",
@@ -176,4 +184,35 @@ class TestGeneratedValidatorHasNoRuntimeDependency(unittest.TestCase):
             _generated_validator.validate({"tracer_provider": {}})
         self.assertIn(
             "must contain ['file_format'] properties", str(caught.exception)
+        )
+
+
+class TestGeneratedValidatorIsCurrentWithTheSchema(unittest.TestCase):
+    """The committed output has to be what regenerating would produce today.
+
+    Everything else in this module exercises the validator's behaviour, which
+    says nothing about whether it was regenerated after the last change to
+    ``schema.json``. A stale validator enforces the previous schema and fails
+    nothing, because the only check that reads ``schema.json`` live compares
+    verdicts on ten fixed documents.
+    """
+
+    def test_recompiling_the_schema_reproduces_the_committed_validator(self):
+        committed = (_PACKAGE_ROOT / "_generated_validator.py").read_text()
+        recompiled = _CODEGEN.compile_validator().source
+        self.assertTrue(
+            recompiled == committed,
+            f"schema.json no longer compiles to the committed "
+            f"_generated_validator.py ({len(committed)} bytes committed, "
+            f"{len(recompiled)} recompiled); run "
+            f"'tox -e generate-config-validator' and commit the result",
+        )
+
+    def test_the_committed_exception_classes_match_the_pinned_fastjsonschema(self):
+        committed = (_PACKAGE_ROOT / "_validation_exceptions.py").read_text()
+        self.assertTrue(
+            _CODEGEN.vendored_exceptions_source() == committed,
+            "_validation_exceptions.py no longer matches the exceptions module "
+            "of the installed fastjsonschema; run "
+            "'tox -e generate-config-validator' and commit the result",
         )
