@@ -36,6 +36,7 @@ from json import loads
 from pathlib import Path
 from re import subn
 from sys import exit as sys_exit
+from typing import NamedTuple
 
 from fastjsonschema import compile_to_code
 from fastjsonschema import exceptions as fastjsonschema_exceptions
@@ -66,7 +67,24 @@ VENDORED_IMPORT: str = (
 )
 
 
-def main() -> int:
+class UnexpectedGeneratorOutput(Exception):
+    """Raised when fastjsonschema emits code this script no longer recognises."""
+
+
+class CompiledValidator(NamedTuple):
+    """The text of the validator module, and how many messages were repaired."""
+
+    source: str
+    repaired_messages: int
+
+
+def compile_validator() -> CompiledValidator:
+    """Compile ``schema.json`` into the text of ``_generated_validator.py``.
+
+    Writes nothing. ``main`` writes the result to disk; the test suite compares
+    it against the committed file so that a schema change without a
+    regeneration fails instead of silently under-enforcing.
+    """
     code: str = compile_to_code(loads(SCHEMA.read_text()), detailed_exceptions=False)
 
     upstream_imports: list[str] = [
@@ -75,27 +93,41 @@ def main() -> int:
         if line.startswith("from fastjsonschema import")
     ]
     if len(upstream_imports) != 1:
-        print(
+        raise UnexpectedGeneratorOutput(
             f"expected exactly one 'from fastjsonschema import' line in the "
             f"generated code, found {len(upstream_imports)}: {upstream_imports}"
         )
-        return 1
 
     truncated: int = code.count(TRUNCATED_REQUIRED_MESSAGE)
     code, rewritten = subn(MISSING_KEYS_RAISE, NAMED_KEYS_RAISE, code)
     if rewritten != truncated:
-        print(
+        raise UnexpectedGeneratorOutput(
             f"expected every one of the {truncated} truncated 'must contain' "
             f"messages to sit under an '__missing_keys' guard, but only "
             f"{rewritten} did; fastjsonschema's code generation has changed"
         )
+
+    return CompiledValidator(
+        LICENSE_HEADER + code.replace(upstream_imports[0], VENDORED_IMPORT), rewritten
+    )
+
+
+def vendored_exceptions_source() -> str:
+    """Return the text of ``_validation_exceptions.py``, copied from fastjsonschema."""
+    return Path(fastjsonschema_exceptions.__file__).read_text()
+
+
+def main() -> int:
+    try:
+        compiled: CompiledValidator = compile_validator()
+    except UnexpectedGeneratorOutput as error:
+        print(error)
         return 1
 
-    VALIDATOR.write_text(
-        LICENSE_HEADER + code.replace(upstream_imports[0], VENDORED_IMPORT)
-    )
-    EXCEPTIONS.write_text(Path(fastjsonschema_exceptions.__file__).read_text())
+    VALIDATOR.write_text(compiled.source)
+    EXCEPTIONS.write_text(vendored_exceptions_source())
 
+    rewritten: int = compiled.repaired_messages
     size: int = VALIDATOR.stat().st_size
     print(f"wrote {VALIDATOR.name} ({size} bytes)")
     print(f"wrote {EXCEPTIONS.name}")
