@@ -25,6 +25,10 @@ Run it after changing ``schema.json``::
 
     tox -e generate-config-validator
 
+Forgetting to is caught rather than silent: ``tests/test_generated_validator.py``
+recompiles the schema through ``compile_validator`` and fails when the result
+differs from the committed ``_generated_validator.py``.
+
 Known gap: ``fastjsonschema`` silently ignores keywords it does not implement
 (``prefixItems``, ``unevaluatedProperties``, ``dependentRequired``,
 ``maxContains``). A schema that starts using one of them would be
