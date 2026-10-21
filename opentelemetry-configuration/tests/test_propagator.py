@@ -20,23 +20,38 @@ from opentelemetry.configuration.models import (
 from opentelemetry.configuration.models import (
     TextMapPropagator as TextMapPropagatorConfig,
 )
+from opentelemetry.context import attach, detach, get_current
+from opentelemetry.context.context import Context
 from opentelemetry.environment_variables import OTEL_PROPAGATORS
+from opentelemetry.propagate import extract
 from opentelemetry.propagators.composite import CompositePropagator
+from opentelemetry.propagators.textmap import TextMapPropagator
 from opentelemetry.trace.propagation.tracecontext import (
     TraceContextTextMapPropagator,
 )
 
 
 class TestCreatePropagator(unittest.TestCase):
-    def test_none_config_returns_empty_composite(self):
+    def test_none_config_returns_noop_extracting_a_root_context(self):
         result = create_propagator(None)
-        self.assertIsInstance(result, CompositePropagator)
-        self.assertEqual(result._propagators, [])  # type: ignore[attr-defined]
+        self.assertNotIsInstance(result, CompositePropagator)
+        self.assertIsInstance(result.extract({}), Context)
 
-    def test_empty_config_returns_empty_composite(self):
+    def test_empty_config_returns_noop_extracting_a_root_context(self):
         result = create_propagator(PropagatorConfig())
-        self.assertIsInstance(result, CompositePropagator)
-        self.assertEqual(result._propagators, [])  # type: ignore[attr-defined]
+        self.assertNotIsInstance(result, CompositePropagator)
+        self.assertIsInstance(result.extract({}), Context)
+
+    def test_noop_preserves_a_context_it_is_given(self):
+        given = Context({"key": "value"})
+        self.assertIs(create_propagator(None).extract({}, given), given)
+
+    def test_noop_writes_nothing_and_declares_no_fields(self):
+        result = create_propagator(None)
+        carrier = {}
+        result.inject(carrier)
+        self.assertEqual(carrier, {})
+        self.assertEqual(result.fields, set())
 
     def test_tracecontext_only(self):
         config = PropagatorConfig(
@@ -158,12 +173,12 @@ class TestCreatePropagator(unittest.TestCase):
     def test_composite_list_none_entry_skipped(self):
         config = PropagatorConfig(composite_list="none")
         result = create_propagator(config)
-        self.assertEqual(result._propagators, [])  # type: ignore[attr-defined]
+        self.assertIsInstance(result.extract({}), Context)
 
     def test_composite_list_empty_entries_skipped(self):
         config = PropagatorConfig(composite_list=",, ,")
         result = create_propagator(config)
-        self.assertEqual(result._propagators, [])  # type: ignore[attr-defined]
+        self.assertIsInstance(result.extract({}), Context)
 
     def test_composite_list_whitespace_around_names(self):
         mock_tc = TraceContextTextMapPropagator()
@@ -268,7 +283,23 @@ class TestConfigurePropagator(unittest.TestCase):
             configure_propagator(None)
             mock_set.assert_called_once()
             arg = mock_set.call_args[0][0]
-            self.assertIsInstance(arg, CompositePropagator)
+            self.assertIsInstance(arg, TextMapPropagator)
+
+    def test_attaching_what_the_global_propagator_extracts_stays_usable(self):
+        """A file without a propagator must not break instrumented requests.
+
+        Instrumentation attaches the result of ``extract`` and later reads the
+        current context. An empty composite returned ``None`` there, and the
+        read raised ``AttributeError: 'NoneType' object has no attribute
+        'get'``.
+        """
+        configure_propagator(None)
+        token = attach(extract({}))
+        try:
+            self.assertIsNotNone(get_current())
+            self.assertIsNone(get_current().get("missing"))
+        finally:
+            detach(token)
 
     def test_configure_propagator_with_config(self):
         config = PropagatorConfig(
