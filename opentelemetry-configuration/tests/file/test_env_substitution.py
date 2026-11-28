@@ -49,6 +49,34 @@ class TestEnvSubstitution(unittest.TestCase):
             self.assertEqual(result, "name: ")
             self.assertIsNone(yaml.safe_load(result)["name"])
 
+    def test_empty_variable_with_a_default_substitutes_the_default(self):
+        """A ${VAR:-default} whose variable is set but empty uses the default.
+
+        The spec substitutes DEFAULT-VALUE when the variable is null, empty or
+        undefined, so a Kubernetes manifest that sets ``value: ""`` reaches the
+        fallback the file declares.
+        """
+        with patch.dict(os.environ, {"SERVICE_NAME": ""}):
+            result = substitute_env_vars("name: ${SERVICE_NAME:-default}")
+            self.assertEqual(result, "name: default")
+
+    def test_empty_variable_without_a_default_substitutes_empty(self):
+        """A ${VAR} whose variable is set but empty stays empty.
+
+        With no DEFAULT-VALUE there is nothing to fall back to, so the result
+        is the empty value that YAML reads as null.
+        """
+        with patch.dict(os.environ, {"SERVICE_NAME": ""}):
+            result = substitute_env_vars("name: ${SERVICE_NAME}")
+            self.assertEqual(result, "name: ")
+            self.assertIsNone(yaml.safe_load(result)["name"])
+
+    def test_empty_variable_with_an_empty_default_substitutes_empty(self):
+        """A ${VAR:-} whose variable is set but empty stays empty."""
+        with patch.dict(os.environ, {"SERVICE_NAME": ""}):
+            result = substitute_env_vars("name: ${SERVICE_NAME:-}")
+            self.assertEqual(result, "name: ")
+
     def test_dollar_sign_escape(self):
         """Test $$ escapes to literal $."""
         result = substitute_env_vars("price: $$100")
