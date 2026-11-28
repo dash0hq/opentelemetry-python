@@ -458,6 +458,45 @@ class TestContainerResourceDetector(unittest.TestCase):
         self.assertEqual(resource.attributes[TELEMETRY_SDK_LANGUAGE], "python")
         self.assertIn("container", logs.output[0])
 
+    def test_container_detector_error_inside_detect_is_skipped_instead_of_failing_the_resource(self):
+        """A detector that raises from detect() is warned about, and the resource is still built."""
+        mock_detector = MagicMock()
+        mock_detector.return_value.detect.side_effect = RuntimeError("no cgroup here")
+        mock_ep = MagicMock()
+        mock_ep.load.return_value = mock_detector
+
+        with (
+            patch(
+                "opentelemetry.configuration._common.entry_points",
+                return_value=[mock_ep],
+            ),
+            self.assertLogs("opentelemetry.configuration._resource", level="ERROR") as logs,
+        ):
+            resource = create_resource(self._config_with_container())
+
+        self.assertNotIn(CONTAINER_ID, resource.attributes)
+        self.assertEqual(resource.attributes[TELEMETRY_SDK_LANGUAGE], "python")
+        self.assertIn("container", logs.output[0])
+
+    def test_a_missing_container_detector_does_not_stop_the_host_detector(self):
+        """Detectors listed after one that cannot be loaded still contribute attributes."""
+        config = ResourceConfig(
+            detection_development=ExperimentalResourceDetection(
+                detectors=[ExperimentalResourceDetector(container={}, host={})]
+            )
+        )
+        with (
+            patch(
+                "opentelemetry.configuration._common.entry_points",
+                return_value=[],
+            ),
+            self.assertLogs("opentelemetry.configuration._resource", level="WARNING"),
+        ):
+            resource = create_resource(config)
+
+        self.assertNotIn(CONTAINER_ID, resource.attributes)
+        self.assertEqual(resource.attributes[HOST_NAME], socket.gethostname())
+
     def test_container_detector_uses_contrib_when_available(self):
         """When the contrib entry point is registered, container.id is detected."""
         mock_resource = Resource({CONTAINER_ID: "abc123"})
