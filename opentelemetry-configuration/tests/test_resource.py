@@ -8,7 +8,6 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from opentelemetry.configuration._conversion import _dict_to_dataclass
-from opentelemetry.configuration._exceptions import ConfigurationError
 from opentelemetry.configuration._resource import create_resource
 from opentelemetry.configuration.models import (
     AttributeNameValue,
@@ -444,16 +443,20 @@ class TestContainerResourceDetector(unittest.TestCase):
         resource = create_resource(config)
         self.assertNotIn(CONTAINER_ID, resource.attributes)
 
-    def test_container_detector_raises_when_package_missing(self):
-        """ConfigurationError is raised when the contrib entry point is not found."""
+    def test_container_detector_missing_package_is_skipped_instead_of_failing_the_resource(self):
+        """A detector whose package is absent is warned about, and the resource is still built."""
         with (
             patch(
                 "opentelemetry.configuration._common.entry_points",
                 return_value=[],
             ),
-            self.assertRaises(ConfigurationError),
+            self.assertLogs("opentelemetry.configuration._resource", level="WARNING") as logs,
         ):
-            create_resource(self._config_with_container())
+            resource = create_resource(self._config_with_container())
+
+        self.assertNotIn(CONTAINER_ID, resource.attributes)
+        self.assertEqual(resource.attributes[TELEMETRY_SDK_LANGUAGE], "python")
+        self.assertIn("container", logs.output[0])
 
     def test_container_detector_uses_contrib_when_available(self):
         """When the contrib entry point is registered, container.id is detected."""
@@ -571,7 +574,7 @@ class TestPluginResourceDetector(unittest.TestCase):
 
         self.assertEqual(resource.attributes["custom.attr"], "value")
 
-    def test_unknown_detector_raises_configuration_error(self):
+    def test_unknown_detector_is_skipped_instead_of_failing_the_resource(self):
         config = ResourceConfig(
             detection_development=ExperimentalResourceDetection(
                 # pylint: disable=unexpected-keyword-arg
@@ -583,6 +586,9 @@ class TestPluginResourceDetector(unittest.TestCase):
                 "opentelemetry.configuration._common.entry_points",
                 return_value=[],
             ),
-            self.assertRaises(ConfigurationError),
+            self.assertLogs("opentelemetry.configuration._resource", level="WARNING") as logs,
         ):
-            create_resource(config)
+            resource = create_resource(config)
+
+        self.assertEqual(resource.attributes[TELEMETRY_SDK_LANGUAGE], "python")
+        self.assertIn("no_such_detector", logs.output[0])
